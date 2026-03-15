@@ -1,0 +1,72 @@
+# =============================================================================
+# Sybase ASE → CockroachDB Migration Configuration
+# =============================================================================
+# Copy this file to migration.yaml and edit for your environment.
+# Passwords support env var interpolation: ${VAR_NAME}
+
+source:
+  driver: "Adaptive Server Enterprise"    # ODBC driver name
+  host: "sybase-prod.internal"
+  port: 5000
+  database: "prod_db"
+  username: "mig_user"
+  password: "${SYBASE_PASSWORD}"          # Set SYBASE_PASSWORD env var
+  odbc_dsn: null                          # Alternative: use a configured DSN
+  bcp_path: "/opt/sap/OCS-16_0/bin/bcp"
+  isql_path: "/opt/sap/OCS-16_0/bin/isql"
+  charset: "utf8"
+
+target:
+  host: "crdb-lb.internal"
+  port: 26257
+  database: "prod_db"
+  username: "mig_user"
+  password: "${CRDB_PASSWORD}"            # Set CRDB_PASSWORD env var
+  sslmode: "verify-full"
+  sslrootcert: "/etc/certs/ca.crt"
+  # How CSV files reach CRDB nodes for IMPORT INTO:
+  #   "userfile"  — upload via cockroach userfile upload (most portable)
+  #   "nodelocal" — files pre-placed on CRDB node filesystem
+  #   "copy_only" — skip IMPORT INTO, always use COPY FROM (slower but simpler)
+  import_method: "userfile"
+  userfile_upload_cmd: "cockroach userfile upload"
+
+migration:
+  export_dir: "/data/migration/export"
+  state_file: "/data/migration/state.json"
+  log_dir: "/data/migration/logs"
+  log_level: "INFO"
+
+  tables:
+    include: ["*"]                        # Glob patterns for tables to migrate
+    exclude: ["tmp_*", "audit_old_*"]     # Glob patterns for tables to skip
+
+  parallelism:
+    export_workers: 8                     # Concurrent BCP export processes
+    import_workers: 4                     # Concurrent IMPORT INTO / COPY jobs
+    cdc_replay_workers: 4                 # Concurrent CDC replay threads
+
+  chunking:
+    large_table_threshold: 1000000        # Row count above which tables get chunked
+    chunk_size: 500000                    # Rows per BCP chunk
+    pk_sampling_limit: 10000              # Rows to sample for PK range estimation
+
+  export:
+    delimiter: "|"                        # Field delimiter (pipe avoids conflicts)
+    row_terminator: "\\n"
+    null_marker: "\\N"                    # How NULLs are represented in CSV
+    bcp_batch_size: 10000
+    bcp_packet_size: 8192
+
+  import:
+    copy_threshold: 50000000              # Bytes — files below this use COPY FROM
+
+  cdc:
+    poll_interval_seconds: 2              # How often to poll CDC log tables
+    batch_size: 5000                      # Rows per CDC replay batch
+    lag_threshold: 100                    # Cutover when all tables below this lag
+
+  validation:
+    row_count: true
+    checksum: true
+    sample_rate: 1.0                      # 1.0 = full, 0.01 = 1% sample
